@@ -188,6 +188,22 @@ class AsyncpgBroker(AsyncBroker):
             _ = await conn.execute(
                 f"NOTIFY {self.channel_name}, '{message_id}'")
 
+    async def notify_all_stored_messages(self) -> None:
+        async with self.write_pool.acquire() as conn:
+            rows = await conn.fetch(
+                f"SELECT id FROM {self.table_name} WHERE locked = FALSE"
+            )
+
+            # send notification for each message
+            for row in rows:
+                message_id = str(row['id'])
+                await conn.execute(
+                    f"NOTIFY {self.channel_name}, '{message_id}'"
+                )
+                logger.info(
+                    f"Notifying stored message {message_id} found in database."
+                )
+
     @override
     async def listen(self) -> AsyncGenerator[AckableMessage, None]:
         """
@@ -202,9 +218,7 @@ class AsyncpgBroker(AsyncBroker):
         if self._queue is None:
             raise ValueError("Startup did not initialize the queue.")
 
-        async with self.write_pool.acquire() as conn:
-            _ = await conn.execute(NOTIFY_STORED_MESSAGES.format(
-                table=self.table_name, channel=self.channel_name))
+        await self.notify_all_stored_messages()
 
         while True:
             try:
