@@ -41,9 +41,9 @@ DECLARE
     msg RECORD;
 BEGIN
     FOR msg IN
-        SELECT id FROM {0} WHERE locked = FALSE
+        SELECT id FROM {table} WHERE locked = FALSE
     LOOP
-        PERFORM pg_notify({1}, msg.id::text);
+        PERFORM pg_notify({channel}, msg.id::text);
     END LOOP;
 END $$;
 """

@@ -106,10 +106,6 @@ class AsyncpgBroker(AsyncBroker):
             self.channel_name, self._notification_handler)
         self._queue = asyncio.Queue()
 
-        async with self.write_pool.acquire() as conn:
-            _ = await conn.execute(NOTIFY_STORED_MESSAGES.format(
-                self.table_name, self.channel_name))
-
     @override
     async def shutdown(self) -> None:
         """Close all connections on shutdown."""
@@ -205,6 +201,10 @@ class AsyncpgBroker(AsyncBroker):
             raise ValueError("Call startup before starting listening.")
         if self._queue is None:
             raise ValueError("Startup did not initialize the queue.")
+
+        async with self.write_pool.acquire() as conn:
+            _ = await conn.execute(NOTIFY_STORED_MESSAGES.format(
+                table=self.table_name, channel=self.channel_name))
 
         while True:
             try:
