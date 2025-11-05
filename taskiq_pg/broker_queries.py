@@ -5,7 +5,8 @@ CREATE TABLE IF NOT EXISTS {} (
     task_name VARCHAR NOT NULL,
     message TEXT NOT NULL,
     labels JSONB NOT NULL,
-    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+    locked BOOLEAN DEFAULT FALSE
 );
 """
 
@@ -15,6 +16,34 @@ VALUES ($1, $2, $3, $4)
 RETURNING id
 """
 
-SELECT_MESSAGE_QUERY = "SELECT * FROM {} WHERE id = $1"
+SELECT_MESSAGE_QUERY = """
+UPDATE {0}
+SET locked = TRUE
+WHERE id = (
+    SELECT id
+    FROM {0}
+    WHERE locked = FALSE AND id = $1
+    FOR UPDATE SKIP LOCKED
+    LIMIT 1
+)
+RETURNING *;
+"""
 
 DELETE_MESSAGE_QUERY = "DELETE FROM {} WHERE id = $1"
+
+UPDATE_MESSAGE_QUERY = """
+UPDATE {} SET locked = FALSE WHERE id = $1
+"""
+
+NOTIFY_STORED_MESSAGES = """
+DO $$
+DECLARE
+    msg RECORD;
+BEGIN
+    FOR msg IN
+        SELECT id FROM {0} WHERE locked = FALSE
+    LOOP
+        PERFORM pg_notify({1}, msg.id::text);
+    END LOOP;
+END $$;
+"""

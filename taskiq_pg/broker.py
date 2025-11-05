@@ -2,6 +2,7 @@ import asyncio
 import json
 import logging
 from collections.abc import AsyncGenerator
+from random import random
 from typing import (
     Any,
     Callable,
@@ -20,6 +21,7 @@ from taskiq_pg.broker_queries import (
     DELETE_MESSAGE_QUERY,
     INSERT_MESSAGE_QUERY,
     SELECT_MESSAGE_QUERY,
+    NOTIFY_STORED_MESSAGES,
 )
 
 _T = TypeVar("_T")
@@ -85,8 +87,10 @@ class AsyncpgBroker(AsyncBroker):
         """Initialize the broker."""
         await super().startup()
 
-        self.read_conn = await asyncpg.connect(self.dsn, **self.connection_kwargs)
-        self.write_pool = await asyncpg.create_pool(self.dsn, **self.pool_kwargs)
+        self.read_conn = await asyncpg.connect(
+            self.dsn, **self.connection_kwargs)
+        self.write_pool = await asyncpg.create_pool(
+            self.dsn, **self.pool_kwargs)
 
         if self.read_conn is None:
             msg = "read_conn not initialized"
@@ -98,8 +102,13 @@ class AsyncpgBroker(AsyncBroker):
         async with self.write_pool.acquire() as conn:
             _ = await conn.execute(CREATE_TABLE_QUERY.format(self.table_name))
 
-        await self.read_conn.add_listener(self.channel_name, self._notification_handler)
+        await self.read_conn.add_listener(
+            self.channel_name, self._notification_handler)
         self._queue = asyncio.Queue()
+
+        async with self.write_pool.acquire() as conn:
+            _ = await conn.execute(NOTIFY_STORED_MESSAGES.format(
+                self.table_name, self.channel_name))
 
     @override
     async def shutdown(self) -> None:
@@ -163,7 +172,8 @@ class AsyncpgBroker(AsyncBroker):
             if delay_value is not None:
                 delay_seconds = int(delay_value)
                 _ = asyncio.create_task(  # noqa: RUF006
-                    self._schedule_notification(message_inserted_id, delay_seconds)
+                    self._schedule_notification(
+                        message_inserted_id, delay_seconds)
                 )
             else:
                 # Send a NOTIFY with the message ID as payload
@@ -171,14 +181,16 @@ class AsyncpgBroker(AsyncBroker):
                     f"NOTIFY {self.channel_name}, '{message_inserted_id}'"
                 )
 
-    async def _schedule_notification(self, message_id: int, delay_seconds: int) -> None:
+    async def _schedule_notification(
+            self, message_id: int, delay_seconds: int) -> None:
         """Schedule a notification to be sent after a delay."""
         await asyncio.sleep(delay_seconds)
         if self.write_pool is None:
             return
         async with self.write_pool.acquire() as conn:
             # Send NOTIFY
-            _ = await conn.execute(f"NOTIFY {self.channel_name}, '{message_id}'")
+            _ = await conn.execute(
+                f"NOTIFY {self.channel_name}, '{message_id}'")
 
     @override
     async def listen(self) -> AsyncGenerator[AckableMessage, None]:
@@ -197,6 +209,9 @@ class AsyncpgBroker(AsyncBroker):
         while True:
             try:
                 payload = await self._queue.get()
+                # Delay to prevent two workers from starting the same task
+                await asyncio.sleep(random())
+
                 message_id = int(payload)
                 message_row = await self.read_conn.fetchrow(
                     SELECT_MESSAGE_QUERY.format(self.table_name), message_id
@@ -217,7 +232,8 @@ class AsyncpgBroker(AsyncBroker):
 
                 async def ack(*, _message_id: int = message_id) -> None:
                     if self.write_pool is None:
-                        raise ValueError("Call startup before starting listening.")
+                        raise ValueError(
+                            "Call startup before starting listening.")
 
                     async with self.write_pool.acquire() as conn:
                         _ = await conn.execute(
